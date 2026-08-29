@@ -6,6 +6,7 @@
  */
 
 import path from 'node:path';
+import semver from 'semver';
 import type { IPackagePublisher, IRegistryClient, Package } from './core/index.ts';
 import { isRegistryError } from './core/index.ts';
 
@@ -39,7 +40,11 @@ export async function isPackagePublished(
 export async function publishPackage(
     pkg: Package,
     publisher: IPackagePublisher,
-    options: { token?: string; registry: string },
+    options: {
+        token?: string; 
+        registry: string; 
+        tag?: string 
+    },
 ): Promise<boolean> {
     let pkgPath: string;
     if (path.isAbsolute(pkg.path)) {
@@ -48,9 +53,7 @@ export async function publishPackage(
         pkgPath = path.resolve(pkg.path);
     }
 
-    const publishOptions: Record<string, any> = {
-        ...(pkg.content.publishConfig || {}),
-    };
+    const publishOptions: Record<string, any> = { ...(pkg.content.publishConfig || {}) };
 
     if (
         options.token &&
@@ -63,7 +66,83 @@ export async function publishPackage(
         publishOptions[`//${url.host}${registryPath}/:_authToken`] = options.token;
     }
 
+    const tag = resolveDistTag(pkg, options.tag, publishOptions.tag);
+    if (tag) {
+        publishOptions.tag = tag;
+    }
+
     return publisher.publish(pkgPath, pkg.content, publishOptions);
+}
+
+/**
+ * Repoint the `latest` dist-tag to the just published version if it trails behind.
+ *
+ * npm pins `latest` on a package's first publish regardless of the dist-tag
+ * used, so packages that only ever publish prereleases keep `latest` stuck at
+ * their first version. `latest` cannot be removed, only repointed — so after a
+ * publish, repoint it when it references an **older prerelease**. A `latest`
+ * claimed by a stable release is never touched.
+ *
+ * @returns `true` if the `latest` dist-tag was repointed.
+ */
+export async function correctLatestDistTag(
+    pkg: Package,
+    registryClient: IRegistryClient,
+    options: { registry: string; token?: string },
+): Promise<boolean> {
+    const { name, version } = pkg.content;
+
+    if (!name || !version || !semver.valid(version)) {
+        return false;
+    }
+
+    let latest: string | undefined;
+    try {
+        const packument = await registryClient.getPackument(name, options);
+        latest = packument['dist-tags'] ?
+            packument['dist-tags'].latest :
+            undefined;
+    } catch (e) {
+        if (isRegistryError(e) && e.statusCode === 404) {
+            return false;
+        }
+
+        throw e;
+    }
+
+    if (
+        !latest ||
+        !semver.valid(latest) ||
+        !semver.prerelease(latest) ||
+        !semver.lt(latest, version)
+    ) {
+        return false;
+    }
+
+    await registryClient.putDistTag(name, 'latest', version, options);
+
+    return true;
+}
+
+function resolveDistTag(
+    pkg: Package,
+    explicitTag: string | undefined,
+    publishConfigTag: string | undefined,
+): string | undefined {
+    if (explicitTag && explicitTag.length > 0) {
+        return explicitTag;
+    }
+
+    if (publishConfigTag && publishConfigTag.length > 0) {
+        return publishConfigTag;
+    }
+
+    const prerelease = semver.prerelease(pkg.content.version);
+    if (prerelease && prerelease.length > 0 && typeof prerelease[0] === 'string') {
+        return prerelease[0];
+    }
+
+    return undefined;
 }
 
 export function isPackagePublishable(pkg: Package): boolean {

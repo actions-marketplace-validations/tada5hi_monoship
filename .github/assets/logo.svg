@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none" role="img" aria-label="monoship">
+    <defs>
+        <linearGradient id="mark" x1="4" y1="116" x2="116" y2="4" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#4f46e5"/>
+            <stop offset="1" stop-color="#22d3ee"/>
+        </linearGradient>
+        <linearGradient id="shine" x1="60" y1="4" x2="60" y2="74" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+            <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+        </linearGradient>
+    </defs>
+
+    <rect x="4" y="4" width="112" height="112" rx="28" fill="url(#mark)"/>
+    <rect x="4" y="4" width="112" height="112" rx="28" fill="url(#shine)"/>
+
+    <!-- the cargo: one container per workspace package -->
+    <g fill="#ffffff">
+        <rect x="36" y="54" width="20" height="18" rx="4"/>
+        <rect x="64" y="54" width="20" height="18" rx="4"/>
+        <rect x="50" y="32" width="20" height="18" rx="4"/>
+    </g>
+
+    <!-- the hull -->
+    <path d="M26 78h68l-11 17a5 5 0 0 1-4 2H41a5 5 0 0 1-4-2z" fill="#ffffff"/>
+
+    <path d="M20 106q8-6 16 0t16 0 16 0 16 0 16 0" stroke="#ffffff" stroke-opacity="0.5" stroke-width="4.5" stroke-linecap="round"/>
+</svg>

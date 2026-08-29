@@ -1,9 +1,14 @@
 import {
-    describe, expect, it,
+    describe, 
+    expect, 
+    it,
 } from 'vitest';
 import {
-    MemoryFileSystem, MemoryPublisher,
-    MemoryRegistryClient, MemoryTokenProvider, NoopLogger,
+    MemoryFileSystem, 
+    MemoryPublisher,
+    MemoryRegistryClient, 
+    MemoryTokenProvider, 
+    NoopLogger,
 } from '../../src/core/index.ts';
 import type { ILogger } from '../../src/core/index.ts';
 import { publish } from '../../src/module.ts';
@@ -161,6 +166,140 @@ describe('src/module', () => {
         expect(names).toContain('pkg-c');
     });
 
+    it('should forward explicit tag to all published packages', async () => {
+        const publisher = new MemoryPublisher();
+
+        await publish(createTestOptions({ publisher, tag: 'next' }));
+
+        expect(publisher.published.length).toEqual(3);
+        for (const p of publisher.published) {
+            expect(p.options.tag).toEqual('next');
+        }
+    });
+
+    it('should auto-detect prerelease tag per package', async () => {
+        const publisher = new MemoryPublisher();
+        const fs = new MemoryFileSystem({
+            '/project/package.json': JSON.stringify({
+                name: 'foo',
+                version: '2.0.0-beta.0',
+                workspaces: ['packages/*'],
+            }),
+            '/project/packages/pkgA/package.json': JSON.stringify({
+                name: 'pkg-a',
+                version: '1.0.0',
+            }),
+        });
+
+        await publish(createTestOptions({ publisher, fileSystem: fs }));
+
+        const root = publisher.published.find((p) => p.manifest.name === 'foo');
+        const a = publisher.published.find((p) => p.manifest.name === 'pkg-a');
+        expect(root?.options.tag).toEqual('beta');
+        expect(a?.options.tag).toBeUndefined();
+    });
+
+    it('should repoint latest dist-tag when it trails behind an older prerelease', async () => {
+        const registryClient = new MemoryRegistryClient({
+            solo: {
+                name: 'solo',
+                'dist-tags': {
+                    latest: '2.0.0-beta.0',
+                    beta: '2.0.0-beta.0',
+                },
+                versions: { '2.0.0-beta.0': { name: 'solo', version: '2.0.0-beta.0' } },
+            },
+        });
+        const fs = new MemoryFileSystem({
+            '/project/package.json': JSON.stringify({
+                name: 'solo',
+                version: '2.0.0-beta.1',
+            }),
+        });
+
+        const packages = await publish(createTestOptions({
+            fileSystem: fs,
+            registryClient,
+        }));
+
+        expect(packages.length).toEqual(1);
+        expect(registryClient.distTags).toEqual([
+            {
+                name: 'solo',
+                tag: 'latest',
+                version: '2.0.0-beta.1',
+            },
+        ]);
+    });
+
+    it('should not repoint latest dist-tag when fixLatest is false', async () => {
+        const registryClient = new MemoryRegistryClient({
+            solo: {
+                name: 'solo',
+                'dist-tags': {
+                    latest: '2.0.0-beta.0',
+                    beta: '2.0.0-beta.0',
+                },
+                versions: { '2.0.0-beta.0': { name: 'solo', version: '2.0.0-beta.0' } },
+            },
+        });
+        const fs = new MemoryFileSystem({
+            '/project/package.json': JSON.stringify({
+                name: 'solo',
+                version: '2.0.0-beta.1',
+            }),
+        });
+
+        const packages = await publish(createTestOptions({
+            fileSystem: fs,
+            registryClient,
+            fixLatest: false,
+        }));
+
+        expect(packages.length).toEqual(1);
+        expect(registryClient.distTags.length).toEqual(0);
+    });
+
+    it('should not repoint latest dist-tag for newly published packages', async () => {
+        const registryClient = new MemoryRegistryClient();
+
+        const packages = await publish(createTestOptions({ registryClient }));
+
+        expect(packages.length).toEqual(3);
+        expect(registryClient.distTags.length).toEqual(0);
+    });
+
+    it('should warn and continue when dist-tag correction fails', async () => {
+        const registryClient = new MemoryRegistryClient({
+            solo: {
+                name: 'solo',
+                'dist-tags': {
+                    latest: '2.0.0-beta.0',
+                    beta: '2.0.0-beta.0',
+                },
+                versions: { '2.0.0-beta.0': { name: 'solo', version: '2.0.0-beta.0' } },
+            },
+        });
+        registryClient.putDistTag = () => Promise.reject(new Error('registry unavailable'));
+        const fs = new MemoryFileSystem({
+            '/project/package.json': JSON.stringify({
+                name: 'solo',
+                version: '2.0.0-beta.1',
+            }),
+        });
+
+        const logger = createSpyLogger();
+        const packages = await publish(createTestOptions({
+            fileSystem: fs,
+            registryClient,
+            logger,
+        }));
+
+        expect(packages.length).toEqual(1);
+        expect(packages[0].published).toBe(true);
+        expect(logger.warnings.some((w) => w.includes('solo') && w.includes('registry unavailable'))).toBe(true);
+    });
+
     it('should not include root package when rootPackage is false', async () => {
         const packages = await publish(createTestOptions({ rootPackage: false }));
 
@@ -196,9 +335,7 @@ describe('src/module', () => {
     });
 
     it('should throw descriptive error on invalid root package.json JSON', async () => {
-        const fs = new MemoryFileSystem({
-            '/project/package.json': '{ invalid json',
-        });
+        const fs = new MemoryFileSystem({ '/project/package.json': '{ invalid json' });
 
         await expect(publish(createTestOptions({ fileSystem: fs }))).rejects.toThrow(
             'Invalid JSON in package.json at /project/package.json',
@@ -226,15 +363,16 @@ describe('src/module', () => {
         const packages = await publish(createTestOptions({
             fileSystem: new MemoryFileSystem({
                 '/project/package.json': JSON.stringify({
-                    name: 'root', version: '1.0.0', workspaces: ['packages/*'],
+                    name: 'root', 
+                    version: '1.0.0', 
+                    workspaces: ['packages/*'],
                 }),
                 '/project/packages/pkgA/package.json': JSON.stringify({
-                    name: 'pkg-a', version: '1.0.0',
+                    name: 'pkg-a',
+                    version: '1.0.0',
                     dependencies: { 'pkg-missing': 'workspace:^' },
                 }),
-                '/project/packages/pkgB/package.json': JSON.stringify({
-                    name: 'pkg-b', version: '1.0.0',
-                }),
+                '/project/packages/pkgB/package.json': JSON.stringify({ name: 'pkg-b', version: '1.0.0' }),
             }),
             logger,
             rootPackage: false,
@@ -289,15 +427,16 @@ describe('src/module', () => {
     it('should skip package when writeFile fails during dependency rewrite', async () => {
         const baseFs = new MemoryFileSystem({
             '/project/package.json': JSON.stringify({
-                name: 'root', version: '1.0.0', workspaces: ['packages/*'],
+                name: 'root', 
+                version: '1.0.0', 
+                workspaces: ['packages/*'],
             }),
             '/project/packages/pkgA/package.json': JSON.stringify({
-                name: 'pkg-a', version: '1.0.0',
+                name: 'pkg-a',
+                version: '1.0.0',
                 dependencies: { 'pkg-b': 'workspace:^' },
             }),
-            '/project/packages/pkgB/package.json': JSON.stringify({
-                name: 'pkg-b', version: '1.0.0',
-            }),
+            '/project/packages/pkgB/package.json': JSON.stringify({ name: 'pkg-b', version: '1.0.0' }),
         });
 
         const logger = createSpyLogger();

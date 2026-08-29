@@ -7,15 +7,25 @@
 
 import path from 'node:path';
 import {
-    EnvTokenProvider, HapicRegistryClient,
-    MemoryTokenProvider, NodeFileSystem, NoopLogger, resolvePublisher,
+    EnvTokenProvider, 
+    HapicRegistryClient,
+    MemoryTokenProvider, 
+    NodeFileSystem, 
+    NoopLogger, 
+    resolvePublisher,
 } from './core/index.ts';
 import type {
-    IFileSystem, ITokenProvider, Package, PackageJson,
+    IFileSystem, 
+    ITokenProvider, 
+    Package, 
+    PackageJson,
 } from './core/index.ts';
 import { REGISTRY_URL } from './constants.ts';
 import {
-    isPackagePublishable, isPackagePublished, publishPackage,
+    correctLatestDistTag,
+    isPackagePublishable,
+    isPackagePublished,
+    publishPackage,
 } from './package.ts';
 import { isError } from './utils/index.ts';
 import { updatePackagesDependencies } from './package-dependency.ts';
@@ -68,6 +78,7 @@ export async function publish(options: PublishOptions = {}): Promise<Package[]> 
     const cwd = options.cwd || process.cwd();
     const registry = options.registry || REGISTRY_URL;
     const rootPackage = options.rootPackage ?? true;
+    const fixLatest = options.fixLatest ?? true;
 
     const fileSystem = options.fileSystem ?? new NodeFileSystem();
     const registryClient = options.registryClient ?? new HapicRegistryClient();
@@ -107,7 +118,6 @@ export async function publish(options: PublishOptions = {}): Promise<Package[]> 
 
     const unpublishedPackages: Array<{ pkg: Package; token?: string }> = [];
     for (const p of packages) {
-
         if (!isPackagePublishable(p)) {
             continue;
         }
@@ -148,7 +158,23 @@ export async function publish(options: PublishOptions = {}): Promise<Package[]> 
     }
 
     for (const { pkg: p, token } of unpublishedPackages) {
-        p.published = await publishPackage(p, publisher, { token, registry });
+        p.published = await publishPackage(p, publisher, {
+            token,
+            registry,
+            tag: options.tag,
+        });
+
+        if (p.published && fixLatest) {
+            try {
+                const corrected = await correctLatestDistTag(p, registryClient, { registry, token });
+                if (corrected) {
+                    logger.info(`Repointed latest dist-tag of ${p.content.name} to ${p.content.version}`);
+                }
+            } catch (e) {
+                const message = isError(e) ? e.message : String(e);
+                logger.warn(`Failed to correct latest dist-tag for ${p.content.name}: ${message}`);
+            }
+        }
     }
 
     return unpublishedPackages

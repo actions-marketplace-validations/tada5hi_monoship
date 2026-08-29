@@ -1,11 +1,20 @@
 import {
-    describe, expect, it,
+    describe, 
+    expect, 
+    it,
 } from 'vitest';
 import {
-    MemoryPublisher, MemoryRegistryClient, NpmCliPublisher, PublishError, RegistryError,
+    MemoryPublisher, 
+    MemoryRegistryClient, 
+    NpmCliPublisher, 
+    PublishError, 
+    RegistryError,
 } from '../../src/core/index.ts';
 import {
-    isPackagePublishable, isPackagePublished, publishPackage,
+    correctLatestDistTag,
+    isPackagePublishable,
+    isPackagePublished,
+    publishPackage,
 } from '../../src/package.ts';
 import type { IRegistryClient, Package, Packument } from '../../src/core/index.ts';
 
@@ -41,7 +50,11 @@ describe('src/package', () => {
         it('should return false for a private package', () => {
             const pkg: Package = {
                 path: '/project/packages/a',
-                content: { name: 'pkg-a', version: '1.0.0', private: true },
+                content: {
+                    name: 'pkg-a', 
+                    version: '1.0.0', 
+                    private: true, 
+                },
             };
             expect(isPackagePublishable(pkg)).toBe(false);
         });
@@ -78,9 +91,7 @@ describe('src/package', () => {
                 content: { name: 'pkg-a', version: '1.0.0' },
             };
 
-            const result = await isPackagePublished(pkg, registry, {
-                registry: 'https://registry.npmjs.org/',
-            });
+            const result = await isPackagePublished(pkg, registry, { registry: 'https://registry.npmjs.org/' });
             expect(result).toBe(true);
         });
 
@@ -98,9 +109,7 @@ describe('src/package', () => {
                 content: { name: 'pkg-a', version: '1.0.0' },
             };
 
-            const result = await isPackagePublished(pkg, registry, {
-                registry: 'https://registry.npmjs.org/',
-            });
+            const result = await isPackagePublished(pkg, registry, { registry: 'https://registry.npmjs.org/' });
             expect(result).toBe(false);
         });
 
@@ -111,9 +120,7 @@ describe('src/package', () => {
                 content: { name: 'pkg-a', version: '1.0.0' },
             };
 
-            const result = await isPackagePublished(pkg, registry, {
-                registry: 'https://registry.npmjs.org/',
-            });
+            const result = await isPackagePublished(pkg, registry, { registry: 'https://registry.npmjs.org/' });
             expect(result).toBe(false);
         });
 
@@ -122,21 +129,8 @@ describe('src/package', () => {
                 async getPackument(): Promise<Packument> {
                     throw new RegistryError('Internal Server Error', 500);
                 },
-            };
-            const pkg: Package = {
-                path: '/project/packages/a',
-                content: { name: 'pkg-a', version: '1.0.0' },
-            };
-
-            await expect(isPackagePublished(pkg, registry, {
-                registry: 'https://registry.npmjs.org/',
-            })).rejects.toThrow(RegistryError);
-        });
-
-        it('should return false on 404 registry error', async () => {
-            const registry: IRegistryClient = {
-                async getPackument(): Promise<Packument> {
-                    throw new RegistryError('Package not found', 404);
+                async putDistTag(): Promise<void> {
+                    // noop
                 },
             };
             const pkg: Package = {
@@ -144,9 +138,24 @@ describe('src/package', () => {
                 content: { name: 'pkg-a', version: '1.0.0' },
             };
 
-            const result = await isPackagePublished(pkg, registry, {
-                registry: 'https://registry.npmjs.org/',
-            });
+            await expect(isPackagePublished(pkg, registry, { registry: 'https://registry.npmjs.org/' })).rejects.toThrow(RegistryError);
+        });
+
+        it('should return false on 404 registry error', async () => {
+            const registry: IRegistryClient = {
+                async getPackument(): Promise<Packument> {
+                    throw new RegistryError('Package not found', 404);
+                },
+                async putDistTag(): Promise<void> {
+                    // noop
+                },
+            };
+            const pkg: Package = {
+                path: '/project/packages/a',
+                content: { name: 'pkg-a', version: '1.0.0' },
+            };
+
+            const result = await isPackagePublished(pkg, registry, { registry: 'https://registry.npmjs.org/' });
             expect(result).toBe(false);
         });
 
@@ -157,9 +166,118 @@ describe('src/package', () => {
                 content: { name: '', version: '1.0.0' },
             };
 
-            await expect(isPackagePublished(pkg, registry, {
-                registry: 'https://registry.npmjs.org/',
-            })).rejects.toThrow('Name or version attribute is missing');
+            await expect(isPackagePublished(pkg, registry, { registry: 'https://registry.npmjs.org/' })).rejects.toThrow('Name or version attribute is missing');
+        });
+    });
+
+    describe('correctLatestDistTag', () => {
+        const registryOptions = { registry: 'https://registry.npmjs.org/' };
+
+        function createPackage(version: string): Package {
+            return {
+                path: '/project/packages/a',
+                content: { name: 'pkg-a', version },
+            };
+        }
+
+        function createRegistry(distTags: Record<string, string>) {
+            return new MemoryRegistryClient({
+                'pkg-a': {
+                    name: 'pkg-a',
+                    'dist-tags': distTags,
+                    versions: {},
+                },
+            });
+        }
+
+        it('should repoint latest when it trails behind an older prerelease', async () => {
+            const registry = createRegistry({
+                latest: '2.0.0-beta.0',
+                beta: '2.0.0-beta.12',
+            });
+
+            const result = await correctLatestDistTag(createPackage('2.0.0-beta.13'), registry, registryOptions);
+
+            expect(result).toBe(true);
+            expect(registry.distTags).toEqual([
+                {
+                    name: 'pkg-a',
+                    tag: 'latest',
+                    version: '2.0.0-beta.13',
+                },
+            ]);
+
+            const packument = await registry.getPackument('pkg-a');
+            expect(packument['dist-tags'].latest).toEqual('2.0.0-beta.13');
+        });
+
+        it('should repoint latest when a stable claims it from an older prerelease', async () => {
+            const registry = createRegistry({ latest: '1.0.0-beta.5' });
+
+            const result = await correctLatestDistTag(createPackage('1.0.0'), registry, registryOptions);
+
+            expect(result).toBe(true);
+            expect(registry.distTags.length).toEqual(1);
+        });
+
+        it('should not touch latest pointing at a stable version', async () => {
+            const registry = createRegistry({ latest: '1.0.0' });
+
+            const result = await correctLatestDistTag(createPackage('2.0.0-beta.0'), registry, registryOptions);
+
+            expect(result).toBe(false);
+            expect(registry.distTags.length).toEqual(0);
+        });
+
+        it('should do nothing when latest already points at the published version', async () => {
+            const registry = createRegistry({ latest: '2.0.0-beta.0' });
+
+            const result = await correctLatestDistTag(createPackage('2.0.0-beta.0'), registry, registryOptions);
+
+            expect(result).toBe(false);
+            expect(registry.distTags.length).toEqual(0);
+        });
+
+        it('should do nothing when latest points at a newer prerelease', async () => {
+            const registry = createRegistry({ latest: '2.0.0-beta.5' });
+
+            const result = await correctLatestDistTag(createPackage('2.0.0-beta.4'), registry, registryOptions);
+
+            expect(result).toBe(false);
+            expect(registry.distTags.length).toEqual(0);
+        });
+
+        it('should return false when the package is not in the registry', async () => {
+            const registry = new MemoryRegistryClient();
+
+            const result = await correctLatestDistTag(createPackage('2.0.0-beta.0'), registry, registryOptions);
+
+            expect(result).toBe(false);
+            expect(registry.distTags.length).toEqual(0);
+        });
+
+        it('should return false when latest is not valid semver', async () => {
+            const registry = createRegistry({ latest: 'not-a-version' });
+
+            const result = await correctLatestDistTag(createPackage('2.0.0-beta.0'), registry, registryOptions);
+
+            expect(result).toBe(false);
+            expect(registry.distTags.length).toEqual(0);
+        });
+
+        it('should propagate transient registry errors (e.g. 500)', async () => {
+            const registry: IRegistryClient = {
+                async getPackument(): Promise<Packument> {
+                    throw new RegistryError('Internal Server Error', 500);
+                },
+                async putDistTag(): Promise<void> {
+                    // noop
+                },
+            };
+
+            await expect(
+                correctLatestDistTag(createPackage('2.0.0-beta.0'), registry, registryOptions),
+            ).rejects.toThrow(RegistryError);
         });
     });
 
@@ -207,11 +325,110 @@ describe('src/package', () => {
                 },
             };
 
-            await publishPackage(pkg, publisher, {
-                registry: 'https://registry.npmjs.org/',
-            });
+            await publishPackage(pkg, publisher, { registry: 'https://registry.npmjs.org/' });
 
             expect(publisher.published[0].options.access).toEqual('public');
+        });
+
+        it('should not pass tag for a stable version', async () => {
+            const publisher = new MemoryPublisher();
+            const pkg: Package = {
+                path: '/project/packages/a',
+                content: { name: 'pkg-a', version: '1.0.0' },
+            };
+
+            await publishPackage(pkg, publisher, { registry: 'https://registry.npmjs.org/' });
+
+            expect(publisher.published[0].options.tag).toBeUndefined();
+        });
+
+        it('should auto-detect tag from prerelease identifier', async () => {
+            const publisher = new MemoryPublisher();
+            const pkg: Package = {
+                path: '/project/packages/a',
+                content: { name: 'pkg-a', version: '2.0.0-beta.0' },
+            };
+
+            await publishPackage(pkg, publisher, { registry: 'https://registry.npmjs.org/' });
+
+            expect(publisher.published[0].options.tag).toEqual('beta');
+        });
+
+        it('should auto-detect tag for alpha prerelease', async () => {
+            const publisher = new MemoryPublisher();
+            const pkg: Package = {
+                path: '/project/packages/a',
+                content: { name: 'pkg-a', version: '1.2.3-alpha.4' },
+            };
+
+            await publishPackage(pkg, publisher, { registry: 'https://registry.npmjs.org/' });
+
+            expect(publisher.published[0].options.tag).toEqual('alpha');
+        });
+
+        it('should prefer explicit tag over auto-detected prerelease identifier', async () => {
+            const publisher = new MemoryPublisher();
+            const pkg: Package = {
+                path: '/project/packages/a',
+                content: { name: 'pkg-a', version: '1.2.3-rc.0' },
+            };
+
+            await publishPackage(pkg, publisher, {
+                registry: 'https://registry.npmjs.org/',
+                tag: 'next',
+            });
+
+            expect(publisher.published[0].options.tag).toEqual('next');
+        });
+
+        it('should prefer explicit tag over publishConfig.tag', async () => {
+            const publisher = new MemoryPublisher();
+            const pkg: Package = {
+                path: '/project/packages/a',
+                content: {
+                    name: 'pkg-a',
+                    version: '1.0.0',
+                    publishConfig: { tag: 'legacy' },
+                },
+            };
+
+            await publishPackage(pkg, publisher, {
+                registry: 'https://registry.npmjs.org/',
+                tag: 'next',
+            });
+
+            expect(publisher.published[0].options.tag).toEqual('next');
+        });
+
+        it('should prefer publishConfig.tag over auto-detected prerelease', async () => {
+            const publisher = new MemoryPublisher();
+            const pkg: Package = {
+                path: '/project/packages/a',
+                content: {
+                    name: 'pkg-a',
+                    version: '1.2.3-beta.0',
+                    publishConfig: { tag: 'next' },
+                },
+            };
+
+            await publishPackage(pkg, publisher, { registry: 'https://registry.npmjs.org/' });
+
+            expect(publisher.published[0].options.tag).toEqual('next');
+        });
+
+        it('should allow explicit tag for a stable version', async () => {
+            const publisher = new MemoryPublisher();
+            const pkg: Package = {
+                path: '/project/packages/a',
+                content: { name: 'pkg-a', version: '1.0.0' },
+            };
+
+            await publishPackage(pkg, publisher, {
+                registry: 'https://registry.npmjs.org/',
+                tag: 'legacy',
+            });
+
+            expect(publisher.published[0].options.tag).toEqual('legacy');
         });
 
         it('should return false on npmjs EPUBLISHCONFLICT', async () => {
@@ -222,7 +439,10 @@ describe('src/package', () => {
             };
             const fs = createFakeFs();
             const publisher = new NpmCliPublisher({
-                execFn, readFileFn: fs.readFileFn, writeFileFn: fs.writeFileFn, unlinkFn: fs.unlinkFn,
+                execFn, 
+                readFileFn: fs.readFileFn, 
+                writeFileFn: fs.writeFileFn, 
+                unlinkFn: fs.unlinkFn,
             });
             const pkg: Package = {
                 path: '/project/packages/a',
@@ -245,7 +465,10 @@ describe('src/package', () => {
             };
             const fs = createFakeFs();
             const publisher = new NpmCliPublisher({
-                execFn, readFileFn: fs.readFileFn, writeFileFn: fs.writeFileFn, unlinkFn: fs.unlinkFn,
+                execFn, 
+                readFileFn: fs.readFileFn, 
+                writeFileFn: fs.writeFileFn, 
+                unlinkFn: fs.unlinkFn,
             });
             const pkg: Package = {
                 path: '/project/packages/a',
@@ -268,7 +491,10 @@ describe('src/package', () => {
             };
             const fs = createFakeFs();
             const publisher = new NpmCliPublisher({
-                execFn, readFileFn: fs.readFileFn, writeFileFn: fs.writeFileFn, unlinkFn: fs.unlinkFn,
+                execFn, 
+                readFileFn: fs.readFileFn, 
+                writeFileFn: fs.writeFileFn, 
+                unlinkFn: fs.unlinkFn,
             });
             const pkg: Package = {
                 path: '/project/packages/a',
@@ -289,7 +515,10 @@ describe('src/package', () => {
             };
             const fs = createFakeFs();
             const publisher = new NpmCliPublisher({
-                execFn, readFileFn: fs.readFileFn, writeFileFn: fs.writeFileFn, unlinkFn: fs.unlinkFn,
+                execFn, 
+                readFileFn: fs.readFileFn, 
+                writeFileFn: fs.writeFileFn, 
+                unlinkFn: fs.unlinkFn,
             });
             const pkg: Package = {
                 path: '/project/packages/a',

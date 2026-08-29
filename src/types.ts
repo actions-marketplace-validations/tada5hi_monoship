@@ -6,7 +6,11 @@
  */
 
 import type {
-    IFileSystem, ILogger, IPackagePublisher, IRegistryClient, ITokenProvider,
+    IFileSystem, 
+    ILogger, 
+    IPackagePublisher, 
+    IRegistryClient, 
+    ITokenProvider,
 } from './core/index.ts';
 
 export type PublishOptions = {
@@ -14,6 +18,8 @@ export type PublishOptions = {
     rootPackage?: boolean,
     registry?: string,
     token?: string,
+    tag?: string,
+    fixLatest?: boolean,
     dryRun?: boolean,
 
     fileSystem?: IFileSystem,
